@@ -160,7 +160,7 @@ app.post('/api/student/update-summary', async (req, res) => {
     }
 });
 
-// API AI CHẨN ĐOÁN HỌC THUẬT (DÙNG ENDPOINT V1 FREE)
+// API AI CHẨN ĐOÁN HỌC THUẬT (SỬA ĐƯỜNG DẪN V1BETA CHUẨN)
 app.post('/api/student/ai-diagnostic', async (req, res) => {
     const { student_id, semester } = req.body;
 
@@ -202,9 +202,9 @@ Giọng văn gần gũi, động viên và mang tính xây dựng.
             return res.status(400).json({ success: false, message: 'Chưa cấu hình GEMINI_API_KEY trên Render!' });
         }
 
-        // Gọi Endpoint v1 chuẩn của gemini-1.5-flash (Không bị giới hạn limit: 0)
+        // Gọi Endpoint v1beta với model gemini-1.5-flash-latest
         const response = await axios.post(
-            `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`,
             {
                 contents: [{ parts: [{ text: prompt }] }]
             }
@@ -215,7 +215,8 @@ Giọng văn gần gũi, động viên và mang tính xây dựng.
 
     } catch (err) {
         console.error("Lỗi AI Diagnostic:", err?.response?.data || err.message);
-        res.status(500).json({ success: false, message: 'Lỗi khi gọi AI phân tích điểm!' });
+        const detailMsg = err?.response?.data?.error?.message || err.message;
+        res.status(500).json({ success: false, message: `Lỗi AI: ${detailMsg}` });
     }
 });
 
