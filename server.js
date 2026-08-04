@@ -3,6 +3,7 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
 const xlsx = require('xlsx');
+const axios = require('axios'); // 👈 1. ĐÃ THÊM AXIOS Ở ĐÂY
 const { pool } = require('./db');
 
 const app = express();
@@ -115,10 +116,8 @@ app.post('/api/student/update-summary', async (req, res) => {
     try {
         const cleanId = String(student_id).trim().toUpperCase();
 
-        // 🛠️ BỘ LỌC DỮ LIỆU: Tự động đổi dấu phẩy thành dấu chấm, chống rỗng, ép kiểu chuẩn
         const parseNum = (val, isFloat = true) => {
             if (val === undefined || val === null || val === '') return 0;
-            // Thay dấu phẩy thành dấu chấm (nếu nhập 7,5 -> 7.5)
             const cleanStr = String(val).replace(/,/g, '.');
             const parsed = isFloat ? parseFloat(cleanStr) : parseInt(cleanStr, 10);
             return isNaN(parsed) ? 0 : parsed;
@@ -132,7 +131,6 @@ app.post('/api/student/update-summary', async (req, res) => {
         const num_tc_tl   = parseNum(tc_tl, false);
         const str_class   = classification || 'N/A';
 
-        // 1. Lưu điểm mới vào Database
         await pool.query(`
             INSERT INTO semester_summaries (student_id, semester, tb_hk10, tb_hk4, tb_tl10, tb_tl4, tc_hk, tc_tl, classification, updated_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
@@ -150,7 +148,6 @@ app.post('/api/student/update-summary', async (req, res) => {
             str_class
         ]);
 
-        // 2. GHI LOG HỆ THỐNG
         await pool.query(
             'INSERT INTO audit_logs (action_type, performed_by, target_student, details) VALUES ($1, $2, $3, $4)',
             ['SELF_UPDATE_SUMMARY', cleanId, cleanId, `Sinh viên tự nhập/sửa điểm HK ${semester} bằng tay`]
@@ -163,26 +160,82 @@ app.post('/api/student/update-summary', async (req, res) => {
     }
 });
 
-// ==========================================
+// 👈 2. ĐÃ THÊM API AI CHẨN ĐOÁN HỌC THUẬT VÀO ĐÂY
+app.post('/api/student/ai-diagnostic', async (req, res) => {
+    const { student_id, semester } = req.body;
+
+    try {
+        const cleanId = String(student_id).trim().toUpperCase();
+
+        // 1. Lấy bảng điểm của sinh viên từ Database Neon
+        const gradeResult = await pool.query(
+            'SELECT * FROM semester_summaries WHERE UPPER(student_id) = $1 AND semester = $2',
+            [cleanId, parseInt(semester)]
+        );
+
+        if (gradeResult.rows.length === 0) {
+            return res.json({ success: false, message: 'Chưa có dữ liệu điểm để AI phân tích!' });
+        }
+
+        const data = gradeResult.rows[0];
+
+        // 2. Tạo câu lệnh Prompt gửi cho Gemini
+        const prompt = `
+Bạn là một cố vấn học tập đại học thông minh và tâm lý. 
+Hãy phân tích bảng điểm Học kỳ ${semester} của sinh viên có mã số ${cleanId}:
+- Điểm trung bình học kỳ (hệ 10): ${data.tb_hk10}
+- Điểm trung bình học kỳ (hệ 4): ${data.tb_hk4}
+- Điểm trung bình tích lũy (hệ 10): ${data.tb_tl10}
+- Điểm trung bình tích lũy (hệ 4): ${data.tb_tl4}
+- Tín chỉ đạt học kỳ: ${data.tc_hk}
+- Tín chỉ tích lũy: ${data.tc_tl}
+- Xếp loại học lực hiện tại: ${data.classification}
+
+Hãy đưa ra nhận xét ngắn gọn, súc tích (khoảng 3-4 gạch đầu dòng) gồm:
+1. 🎯 Đánh giá tổng quan điểm mạnh hoặc điểm cần cải thiện.
+2. ⚠️ Cảnh báo nguy cơ mất học bổng hay tụt GPA tích lũy (nếu có).
+3. 💡 Lời khuyên hành động cụ thể cho học kỳ tiếp theo.
+Giọng văn gần gũi, động viên và mang tính xây dựng.
+        `;
+
+        // 3. Lấy API Key từ Environment Variable của Render
+        const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+        if (!GEMINI_API_KEY) {
+            return res.status(400).json({ success: false, message: 'Chưa cấu hình GEMINI_API_KEY trên Render!' });
+        }
+
+        const response = await axios.post(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+            {
+                contents: [{ parts: [{ text: prompt }] }]
+            }
+        );
+
+        const aiAdvice = response.data.candidates[0].content.parts[0].text;
+        res.json({ success: true, advice: aiAdvice });
+
+    } catch (err) {
+        console.error("Lỗi AI Diagnostic:", err?.response?.data || err.message);
+        res.status(500).json({ success: false, message: 'Lỗi khi gọi AI phân tích điểm!' });
+    }
+});
+
 // 7. API UPLOAD FILE EXCEL TỔNG KẾT (CÓ BACKUP)
-// ==========================================
 app.post('/api/upload-semester-excel', upload.single('excelFile'), async (req, res) => {
     const { student_id } = req.body;
     if (!req.file || !student_id) return res.status(400).json({ success: false, message: 'Thiếu file hoặc mã sinh viên!' });
 
     const cleanStudentId = student_id.toUpperCase();
     try {
-        // 🛑 BƯỚC BACKUP (SNAPSHOT): Lấy dữ liệu hiện tại trước khi ghi đè
         const currentDataQuery = await pool.query('SELECT * FROM semester_summaries WHERE UPPER(student_id) = $1', [cleanStudentId]);
         const currentData = currentDataQuery.rows;
 
-        // Lưu bản snapshot vào bảng import_backups dạng JSONB
         await pool.query(
             'INSERT INTO import_backups (student_id, backup_data) VALUES ($1, $2)',
             [cleanStudentId, JSON.stringify(currentData)]
         );
 
-        // 🟢 BƯỚC IMPORT: Đọc và ghi đè dữ liệu từ file Excel
         const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
         const sheetName = workbook.SheetNames[0];
         const rows = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
@@ -216,15 +269,12 @@ app.post('/api/upload-semester-excel', upload.single('excelFile'), async (req, r
     }
 });
 
-// ==========================================
 // 7.1. API KHÔI PHỤC DỮ LIỆU (ROLLBACK) TỪ SNAPSHOT GẦN NHẤT
-// ==========================================
 app.post('/api/rollback', async (req, res) => {
     const { student_id } = req.body;
     const cleanId = String(student_id).trim().toUpperCase();
 
     try {
-        // Tìm bản sao lưu gần nhất của sinh viên này
         const backupQuery = await pool.query(
             'SELECT * FROM import_backups WHERE UPPER(student_id) = $1 ORDER BY created_at DESC LIMIT 1',
             [cleanId]
@@ -235,12 +285,10 @@ app.post('/api/rollback', async (req, res) => {
         }
 
         const backup = backupQuery.rows[0];
-        const oldData = backup.backup_data; // oldData lúc này là 1 mảng JSON chứa các học kỳ cũ
+        const oldData = backup.backup_data;
 
-        // Xóa sạch dữ liệu điểm hiện tại bị sai của sinh viên này
         await pool.query('DELETE FROM semester_summaries WHERE UPPER(student_id) = $1', [cleanId]);
 
-        // Phục hồi lại dữ liệu cũ từ JSON
         for (const row of oldData) {
             await pool.query(`
                 INSERT INTO semester_summaries (student_id, semester, tb_hk10, tb_hk4, tb_tl10, tb_tl4, tc_hk, tc_tl, classification, updated_at)
@@ -248,7 +296,6 @@ app.post('/api/rollback', async (req, res) => {
             `, [cleanId, row.semester, row.tb_hk10, row.tb_hk4, row.tb_tl10, row.tb_tl4, row.tc_hk, row.tc_tl, row.classification, row.updated_at]);
         }
 
-        // Xóa bản backup vừa dùng đi (để tránh rollback lặp lại cùng 1 mốc)
         await pool.query('DELETE FROM import_backups WHERE id = $1', [backup.id]);
 
         await pool.query(
@@ -283,7 +330,6 @@ app.get('/api/semester-rankings/:semester/:student_id', async (req, res) => {
     const sem = parseInt(semester);
     const cleanId = student_id.toUpperCase();
     try {
-        // Lấy thứ hạng kỳ hiện tại
         const query = `
             SELECT u.student_id, u.full_name, s.tb_hk10 as gpa10, s.tb_hk4 as gpa4, s.classification,
                    DENSE_RANK() OVER (ORDER BY s.tb_hk4 DESC, s.tb_hk10 DESC) as rank
@@ -302,7 +348,6 @@ app.get('/api/semester-rankings/:semester/:student_id', async (req, res) => {
             };
         });
 
-        // Lấy thứ hạng kỳ trước (nếu có) để so sánh
         let previous_rank = null;
         if (sem > 1) {
             const prevQuery = `
