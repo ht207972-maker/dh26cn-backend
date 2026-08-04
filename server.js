@@ -160,7 +160,7 @@ app.post('/api/student/update-summary', async (req, res) => {
     }
 });
 
-// API AI CHẨN ĐOÁN HỌC THUẬT (ĐÃ CẬP NHẬT MODEL NEW GEMINI)
+// API AI CHẨN ĐOÁN HỌC THUẬT (DÙNG ENDPOINT V1 FREE)
 app.post('/api/student/ai-diagnostic', async (req, res) => {
     const { student_id, semester } = req.body;
 
@@ -202,9 +202,9 @@ Giọng văn gần gũi, động viên và mang tính xây dựng.
             return res.status(400).json({ success: false, message: 'Chưa cấu hình GEMINI_API_KEY trên Render!' });
         }
 
-        // Đổi đường dẫn model sang gemini-2.0-flash
+        // Gọi Endpoint v1 chuẩn của gemini-1.5-flash (Không bị giới hạn limit: 0)
         const response = await axios.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+            `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
             {
                 contents: [{ parts: [{ text: prompt }] }]
             }
