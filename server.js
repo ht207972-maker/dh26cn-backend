@@ -160,24 +160,21 @@ app.post('/api/student/update-summary', async (req, res) => {
     }
 });
 
-// API AI CHẨN ĐOÁN HỌC THUẬT (SỬA ĐƯỜNG DẪN V1BETA CHUẨN)
+const { GoogleGenAI } = require('@google/genai');
+
+// API AI CHẨN ĐOÁN HỌC THUẬT (DÙNG SDK CHÍNH THỨC - HỖ TRỢ KEY DẠNG AQ.)
 app.post('/api/student/ai-diagnostic', async (req, res) => {
     const { student_id, semester } = req.body;
-
     try {
         const cleanId = String(student_id).trim().toUpperCase();
-
         const gradeResult = await pool.query(
             'SELECT * FROM semester_summaries WHERE UPPER(student_id) = $1 AND semester = $2',
             [cleanId, parseInt(semester)]
         );
-
         if (gradeResult.rows.length === 0) {
             return res.json({ success: false, message: 'Chưa có dữ liệu điểm để AI phân tích!' });
         }
-
         const data = gradeResult.rows[0];
-
         const prompt = `
 Bạn là một cố vấn học tập đại học thông minh và tâm lý. 
 Hãy phân tích bảng điểm Học kỳ ${semester} của sinh viên có mã số ${cleanId}:
@@ -188,34 +185,33 @@ Hãy phân tích bảng điểm Học kỳ ${semester} của sinh viên có mã 
 - Tín chỉ đạt học kỳ: ${data.tc_hk}
 - Tín chỉ tích lũy: ${data.tc_tl}
 - Xếp loại học lực hiện tại: ${data.classification}
-
 Hãy đưa ra nhận xét ngắn gọn, súc tích (khoảng 3-4 gạch đầu dòng) gồm:
 1. 🎯 Đánh giá tổng quan điểm mạnh hoặc điểm cần cải thiện.
 2. ⚠️ Cảnh báo nguy cơ mất học bổng hay tụt GPA tích lũy (nếu có).
 3. 💡 Lời khuyên hành động cụ thể cho học kỳ tiếp theo.
 Giọng văn gần gũi, động viên và mang tính xây dựng.
         `;
-
         const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-
         if (!GEMINI_API_KEY) {
             return res.status(400).json({ success: false, message: 'Chưa cấu hình GEMINI_API_KEY trên Render!' });
         }
 
-        // Gọi Endpoint v1beta với model gemini-1.5-flash-latest
-        const response = await axios.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`,
-            {
-                contents: [{ parts: [{ text: prompt }] }]
-            }
-        );
+        const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+        });
 
-        const aiAdvice = response.data.candidates[0].content.parts[0].text;
+        const aiAdvice = response.text;
+        if (!aiAdvice) {
+            console.error("Gemini trả về không có nội dung:", JSON.stringify(response));
+            return res.status(500).json({ success: false, message: 'AI không trả về nội dung phân tích. Vui lòng thử lại.' });
+        }
+
         res.json({ success: true, advice: aiAdvice });
-
     } catch (err) {
-        console.error("Lỗi AI Diagnostic:", err?.response?.data || err.message);
-        const detailMsg = err?.response?.data?.error?.message || err.message;
+        console.error("Lỗi AI Diagnostic:", err?.response?.data || err.message || err);
+        const detailMsg = err?.response?.data?.error?.message || err.message || 'Lỗi không xác định';
         res.status(500).json({ success: false, message: `Lỗi AI: ${detailMsg}` });
     }
 });
