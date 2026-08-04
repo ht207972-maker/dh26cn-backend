@@ -160,14 +160,13 @@ app.post('/api/student/update-summary', async (req, res) => {
     }
 });
 
-// 👈 2. ĐÃ THÊM API AI CHẨN ĐOÁN HỌC THUẬT VÀO ĐÂY
+// API AI CHẨN ĐOÁN HỌC THUẬT (ĐÃ CẬP NHẬT MODEL NEW GEMINI)
 app.post('/api/student/ai-diagnostic', async (req, res) => {
     const { student_id, semester } = req.body;
 
     try {
         const cleanId = String(student_id).trim().toUpperCase();
 
-        // 1. Lấy bảng điểm của sinh viên từ Database Neon
         const gradeResult = await pool.query(
             'SELECT * FROM semester_summaries WHERE UPPER(student_id) = $1 AND semester = $2',
             [cleanId, parseInt(semester)]
@@ -179,7 +178,6 @@ app.post('/api/student/ai-diagnostic', async (req, res) => {
 
         const data = gradeResult.rows[0];
 
-        // 2. Tạo câu lệnh Prompt gửi cho Gemini
         const prompt = `
 Bạn là một cố vấn học tập đại học thông minh và tâm lý. 
 Hãy phân tích bảng điểm Học kỳ ${semester} của sinh viên có mã số ${cleanId}:
@@ -198,15 +196,15 @@ Hãy đưa ra nhận xét ngắn gọn, súc tích (khoảng 3-4 gạch đầu d
 Giọng văn gần gũi, động viên và mang tính xây dựng.
         `;
 
-        // 3. Lấy API Key từ Environment Variable của Render
         const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
         if (!GEMINI_API_KEY) {
             return res.status(400).json({ success: false, message: 'Chưa cấu hình GEMINI_API_KEY trên Render!' });
         }
 
+        // Đổi đường dẫn model sang gemini-2.0-flash
         const response = await axios.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
             {
                 contents: [{ parts: [{ text: prompt }] }]
             }
