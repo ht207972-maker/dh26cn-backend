@@ -111,8 +111,26 @@ app.post('/api/admin/update-summary-row', async (req, res) => {
 // 6. API SINH VIÊN: TỰ SỬA ĐIỂM CỦA CHÍNH MÌNH TỪNG Ô
 app.post('/api/student/update-summary', async (req, res) => {
     const { student_id, semester, tb_hk10, tb_hk4, tb_tl10, tb_tl4, tc_hk, tc_tl, classification } = req.body;
+    
     try {
         const cleanId = String(student_id).trim().toUpperCase();
+
+        // 🛠️ BỘ LỌC DỮ LIỆU: Tự động đổi dấu phẩy thành dấu chấm, chống rỗng, ép kiểu chuẩn
+        const parseNum = (val, isFloat = true) => {
+            if (val === undefined || val === null || val === '') return 0;
+            // Thay dấu phẩy thành dấu chấm (nếu nhập 7,5 -> 7.5)
+            const cleanStr = String(val).replace(/,/g, '.');
+            const parsed = isFloat ? parseFloat(cleanStr) : parseInt(cleanStr, 10);
+            return isNaN(parsed) ? 0 : parsed;
+        };
+
+        const num_tb_hk10 = parseNum(tb_hk10, true);
+        const num_tb_hk4  = parseNum(tb_hk4, true);
+        const num_tb_tl10 = parseNum(tb_tl10, true);
+        const num_tb_tl4  = parseNum(tb_tl4, true);
+        const num_tc_hk   = parseNum(tc_hk, false);
+        const num_tc_tl   = parseNum(tc_tl, false);
+        const str_class   = classification || 'N/A';
 
         // 1. Lưu điểm mới vào Database
         await pool.query(`
@@ -124,9 +142,15 @@ app.post('/api/student/update-summary', async (req, res) => {
                 tb_tl10 = EXCLUDED.tb_tl10, tb_tl4 = EXCLUDED.tb_tl4,
                 tc_hk = EXCLUDED.tc_hk, tc_tl = EXCLUDED.tc_tl,
                 classification = EXCLUDED.classification, updated_at = NOW();
-        `, [cleanId, semester, tb_hk10, tb_hk4, tb_tl10, tb_tl4, tc_hk, tc_tl, classification]);
+        `, [
+            cleanId, semester, 
+            num_tb_hk10, num_tb_hk4, 
+            num_tb_tl10, num_tb_tl4, 
+            num_tc_hk, num_tc_tl, 
+            str_class
+        ]);
 
-        // 2. GHI LOG HỆ THỐNG NGAY LẬP TỨC (QUAN TRỌNG ⚡)
+        // 2. GHI LOG HỆ THỐNG
         await pool.query(
             'INSERT INTO audit_logs (action_type, performed_by, target_student, details) VALUES ($1, $2, $3, $4)',
             ['SELF_UPDATE_SUMMARY', cleanId, cleanId, `Sinh viên tự nhập/sửa điểm HK ${semester} bằng tay`]
@@ -134,6 +158,7 @@ app.post('/api/student/update-summary', async (req, res) => {
 
         res.json({ success: true, message: 'Cập nhật điểm thành công!' });
     } catch (err) {
+        console.error("Lỗi Server khi cập nhật điểm:", err);
         res.status(500).json({ success: false, message: 'Lỗi cập nhật điểm cá nhân!' });
     }
 });
@@ -326,4 +351,4 @@ app.post('/api/admin/reset-password', async (req, res) => {
 });
 
 const PORT = 5000;
-app.listen(PORT, () => console.log(`Backend Server đang chạy tại http://localhost:5000`));
+app.listen(PORT, () => console.log(`Backend Server đang chạy tại https://dh26cn-backend.onrender.com`));
